@@ -1,0 +1,6 @@
+{
+  "description": "this.shared() herite : la resolution suit la clause extends jusqu'a la classe mere (autre fichier)",
+  "edges": [
+    ["child.ts::run", "base.ts::shared"]
+  ]
+}

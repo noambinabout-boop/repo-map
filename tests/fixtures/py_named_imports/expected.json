@@ -1,0 +1,7 @@
+{
+  "description": "from mod import parse, helper as h : noms importes resolus vers mod (contourne builtin, alias, pas de fan-out)",
+  "edges": [
+    ["consumer.py::use", "mod.py::helper"],
+    ["consumer.py::use", "mod.py::parse"]
+  ]
+}

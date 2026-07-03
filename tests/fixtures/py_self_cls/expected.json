@@ -1,0 +1,9 @@
+{
+  "description": "self./cls. resolus par scope vers la classe englobante (filtre builtin saute, pas de fan-out inter-classes)",
+  "edges": [
+    ["alpha.py::make", "alpha.py::parse"],
+    ["alpha.py::run", "alpha.py::list"],
+    ["alpha.py::run", "alpha.py::parse"],
+    ["beta.py::go", "beta.py::helper"]
+  ]
+}

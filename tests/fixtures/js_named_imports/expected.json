@@ -1,0 +1,8 @@
+{
+  "description": "import { foo }, { parse }, { foo as bar } : noms importes resolus vers le bon fichier (desambiguisation, alias, contourne builtin)",
+  "edges": [
+    ["consumer.ts::use", "mod.ts::foo"],
+    ["consumer.ts::use", "mod.ts::parse"],
+    ["consumer.ts::use", "other.ts::foo"]
+  ]
+}

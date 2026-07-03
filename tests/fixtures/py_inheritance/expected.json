@@ -1,0 +1,6 @@
+{
+  "description": "self.shared() herite : la resolution remonte l'heritage Python jusqu'a la classe mere (autre fichier)",
+  "edges": [
+    ["child.py::run", "base.py::shared"]
+  ]
+}

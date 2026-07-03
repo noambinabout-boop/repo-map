@@ -1,0 +1,6 @@
+{
+  "description": "this.foo() resolu par scope vers la classe englobante (pas de fan-out vers l'homonyme d'un autre fichier)",
+  "edges": [
+    ["service.ts::run", "service.ts::parse"]
+  ]
+}

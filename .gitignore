@@ -1,0 +1,11 @@
+# Environnement Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# Artefact généré par build_graph.py (sortie, régénérable)
+code_graph.json
+
+# Cache central de repo-map (si REPO_MAP_CACHE pointe ici)
+.repo-map/
