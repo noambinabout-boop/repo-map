@@ -1,0 +1,7 @@
+{
+  "description": "import M from './modal' (default class, local != nom) + import b (default function) : new M().draw() resout via le default vers modal.ts::draw, b() vers builder.ts::build (pas de fan-out vers deco.ts::draw)",
+  "edges": [
+    ["main.ts::run", "builder.ts::build"],
+    ["main.ts::run", "modal.ts::draw"]
+  ]
+}

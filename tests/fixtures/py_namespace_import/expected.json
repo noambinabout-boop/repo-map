@@ -1,0 +1,7 @@
+{
+  "description": "import mymod as m / import plain ; m.foo() + plain.bar() : les imports de module resolvent vers mymod.py::foo et plain.py::bar (pas de fan-out vers other.py)",
+  "edges": [
+    ["main.py::run", "mymod.py::foo"],
+    ["main.py::run", "plain.py::bar"]
+  ]
+}

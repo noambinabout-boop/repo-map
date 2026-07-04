@@ -74,3 +74,13 @@
 ; `a()` vers le bon fichier au lieu d'un fan-out. (default `import x` et `* as ns` = nom de
 ; module, hors scope ici -> relèvent de l'inférence de type.)
 (import_statement) @reference.import.stmt
+
+; export default d'une classe/fonction : nom du symbole exporté par défaut de CE fichier,
+; pour qu'un `import Foo from './ce-fichier'` (nom local quelconque) résolve vers lui. Le
+; `default` discrimine l'export par défaut des exports nommés (`export class`/`function`).
+(export_statement
+  "default"
+  declaration: (class_declaration name: (identifier) @reference.export.default))
+(export_statement
+  "default"
+  declaration: (function_declaration name: (identifier) @reference.export.default))

@@ -82,3 +82,13 @@
 ; (`import { a, b as c } from './mod'`) à son module source (même méca que la version JS).
 ; default `import x` et `import * as ns` = nom de module -> hors scope (inférence de type).
 (import_statement) @reference.import.stmt
+
+; export default d'une classe/fonction : nom du symbole exporté par défaut de CE fichier,
+; pour qu'un `import Foo from './ce-fichier'` (nom local quelconque) résolve vers lui. Le
+; `default` discrimine l'export par défaut. ⚠ En TS le nom de classe est un type_identifier.
+(export_statement
+  "default"
+  declaration: (class_declaration name: (type_identifier) @reference.export.default))
+(export_statement
+  "default"
+  declaration: (function_declaration name: (identifier) @reference.export.default))

@@ -1,0 +1,6 @@
+{
+  "description": "import * as ns from './mod' ; ns.foo() : le namespace lie le module -> ns.foo() resout vers mod.ts::foo seulement (pas de fan-out vers other.ts::foo)",
+  "edges": [
+    ["main.ts::run", "mod.ts::foo"]
+  ]
+}

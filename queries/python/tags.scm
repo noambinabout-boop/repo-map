@@ -60,3 +60,10 @@
 ; le bon fichier au lieu d'un fan-out par nom. (Le module lui-même reste capturé ci-dessus
 ; comme @reference.import pour le graphe fichier->fichier ; ici on veut les noms importés.)
 (import_from_statement) @reference.import.from
+
+; import_statement ENTIER : build_graph.py le parcourt pour lier un import de MODULE
+; (`import mod` / `import pkg.mod as m`) au module source, et résoudre un appel `m.foo()`
+; vers le bon fichier (inférence namespace). Distinct de @reference.import ci-dessus (qui
+; ne donne que le nom de module, sans le nom LOCAL appelable). Sans alias, seul un module à
+; un seul segment est utilisable comme récepteur simple `mod.foo()` (le côté build filtre).
+(import_statement) @reference.import.mod

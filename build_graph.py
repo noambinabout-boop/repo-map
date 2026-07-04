@@ -47,7 +47,7 @@ QUERIES_ROOT = os.path.join(os.path.dirname(__file__), "queries")
 # "imports", ou déplacement du rank hors du cache disque vers un calcul à la demande).
 # server.py compare ce numéro à celui du cache disque pour forcer un rebuild complet
 # plutôt que de mélanger silencieusement ancien/nouveau schéma.
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 # noms à NE PAS résoudre comme symboles internes (sinon les appels aux builtins/
 # méthodes ubiquitaires polluent le PageRank en pointant un symbole homonyme).
@@ -365,10 +365,18 @@ def parse_file(spec, source):
                 continue  # wildcard_import, etc.
             import_bindings.append({"local": local, "orig": orig, "spec": spec, "level": level})
 
-    # JS/TS : `import { orig as local } from './mod'` — mêmes bindings {local, orig, spec}.
-    # On ne prend QUE les named imports (import_specifier) ; le default `import x` et le
-    # namespace `import * as ns` lient un nom de MODULE (appel via `ns.foo()`) -> inférence
-    # de type, hors scope. level toujours 0 (les imports JS/TS sont résolus par chemin relatif).
+    # 6) bindings de MODULE (namespace/default) -> INFÉRENCE sur `ns.foo()` / `Foo()` :
+    #  - namespace_bindings : nom_local -> module (fichier) ; usage `ns.foo()` résolu vers
+    #    module::foo. JS/TS `import * as ns` + Python `import mod` / `import pkg.mod as m`.
+    #  - default_bindings   : nom_local -> export DEFAULT du module (JS/TS `import Foo from ...`) ;
+    #    résolu vers le vrai symbole exporté (le nom local peut différer, cf. assemble).
+    #  - default_export     : nom du symbole exporté par DÉFAUT de CE fichier (JS/TS), pour
+    #    qu'un autre fichier l'important en default résolve vers lui.
+    namespace_bindings, default_bindings = [], []
+    default_export = None
+
+    # JS/TS : un seul import_statement peut porter les trois formes
+    # (`import Foo, { a as b }, * as ns from './mod'`). On dispatche sur le type de clause.
     for n in captures.get("reference.import.stmt", []):
         source = n.child_by_field_name("source")
         if source is None:
@@ -380,20 +388,55 @@ def parse_file(spec, source):
             if clause.type != "import_clause":
                 continue
             for named in clause.named_children:
-                if named.type != "named_imports":
-                    continue  # ignore default (identifier) et namespace_import
-                for isp in named.named_children:
-                    if isp.type != "import_specifier":
-                        continue
-                    name_n = isp.child_by_field_name("name")
-                    if name_n is None:
-                        continue
-                    alias_n = isp.child_by_field_name("alias")
-                    orig = name_n.text.decode("utf8")
-                    local = alias_n.text.decode("utf8") if alias_n is not None else orig
-                    import_bindings.append({"local": local, "orig": orig, "spec": spec, "level": level})
+                if named.type == "named_imports":            # import { orig as local }
+                    for isp in named.named_children:
+                        if isp.type != "import_specifier":
+                            continue
+                        name_n = isp.child_by_field_name("name")
+                        if name_n is None:
+                            continue
+                        alias_n = isp.child_by_field_name("alias")
+                        orig = name_n.text.decode("utf8")
+                        local = alias_n.text.decode("utf8") if alias_n is not None else orig
+                        import_bindings.append({"local": local, "orig": orig, "spec": spec, "level": level})
+                elif named.type == "namespace_import":        # import * as ns
+                    for c in named.named_children:
+                        if c.type == "identifier":
+                            namespace_bindings.append(
+                                {"local": c.text.decode("utf8"), "spec": spec, "level": level})
+                elif named.type == "identifier":              # import Foo (default)
+                    default_bindings.append(
+                        {"local": named.text.decode("utf8"), "spec": spec, "level": level})
 
-    return defs, refs, imports, import_bindings, assignments
+    # Python : `import mod` / `import pkg.mod as m` — lie un nom de MODULE (usage `mod.foo()`).
+    # Sans alias, seul un module à UN segment (`import mod`) est utilisable comme récepteur
+    # simple `mod.foo()` (un `import pkg.mod` s'appelle `pkg.mod.foo()`, récepteur composé non
+    # capturé). Avec alias, le local est l'alias et le module = le chemin pointé complet.
+    for n in captures.get("reference.import.mod", []):
+        for name_node in n.children_by_field_name("name"):
+            if name_node.type == "dotted_name":
+                if sum(1 for c in name_node.children if c.type == "identifier") != 1:
+                    continue  # import pkg.mod (multi-segment, sans alias) -> hors scope
+                local = name_node.text.decode("utf8")
+                namespace_bindings.append({"local": local, "spec": local, "level": 0})
+            elif name_node.type == "aliased_import":          # import pkg.mod as m
+                mod_n = name_node.child_by_field_name("name")
+                alias_n = name_node.child_by_field_name("alias")
+                if mod_n is None or alias_n is None:
+                    continue
+                namespace_bindings.append({
+                    "local": alias_n.text.decode("utf8"),
+                    "spec": mod_n.text.decode("utf8"), "level": 0,
+                })
+
+    # nom de l'export DEFAULT de ce fichier (JS/TS) : au plus un par fichier.
+    for n in captures.get("reference.export.default", []):
+        default_export = n.text.decode("utf8")
+        break
+
+    mod_imports = {"namespace": namespace_bindings, "default": default_bindings,
+                   "default_export": default_export}
+    return defs, refs, imports, import_bindings, assignments, mod_imports
 
 
 def _scan(folder, prev=None):
@@ -429,9 +472,10 @@ def _scan(folder, prev=None):
             spec = LANGS[os.path.splitext(path)[1].lower()]
             with open(path, "rb") as fh:
                 source = fh.read()
-            defs, refs, imports, import_bindings, assignments = parse_file(spec, source)
+            defs, refs, imports, import_bindings, assignments, mod_imports = parse_file(spec, source)
             files[rel] = {"defs": defs, "refs": refs, "imports": imports,
-                          "import_bindings": import_bindings, "assignments": assignments}
+                          "import_bindings": import_bindings, "assignments": assignments,
+                          "mod_imports": mod_imports}
             reparsed += 1
     return files, mtimes, reparsed, reused
 
@@ -666,6 +710,34 @@ def assemble(files):
         if per_scope:
             var_types[rel] = per_scope
 
+    # RÉSOLUTION DES IMPORTS DE MODULE (namespace/default) — même prudence qu'import_targets
+    # (jamais d'arête inventée : on ne garde un binding que si sa cible existe vraiment) :
+    #  - namespace_targets[fichier] = {local: fichier_module}      -> `ns.foo()` = module::foo
+    #  - default_targets[fichier]   = {local: (fichier, nom_réel)} -> `import Foo` (default) résout
+    #    vers LE symbole exporté par défaut du module (nom local possiblement ≠ nom du symbole).
+    default_export_of = {rel: data.get("mod_imports", {}).get("default_export")
+                         for rel, data in files.items()}
+    namespace_targets, default_targets = {}, {}
+    for rel, data in files.items():
+        mi = data.get("mod_imports", {})
+        nmap = {}
+        for b in mi.get("namespace", []):
+            target = _resolve_import(files, rel, {"spec": b["spec"], "level": b["level"]})
+            if target is not None:
+                nmap[b["local"]] = target
+        if nmap:
+            namespace_targets[rel] = nmap
+        dmap = {}
+        for b in mi.get("default", []):
+            target = _resolve_import(files, rel, {"spec": b["spec"], "level": b["level"]})
+            if target is None:
+                continue
+            real = default_export_of.get(target)
+            if real and any(d["name"] == real for d in files[target]["defs"]):
+                dmap[b["local"]] = (target, real)
+        if dmap:
+            default_targets[rel] = dmap
+
     # arêtes du graphe : (symbole appelant) -> (symbole défini), résolues par NOM
     # (sauf self./cls. ci-dessous, résolus par SCOPE quand la classe englobante est connue)
     edges = []
@@ -706,16 +778,33 @@ def assemble(files):
             # (jamais de PERTE d'arête — au pire on retombe sur le comportement d'avant).
             receiver = r.get("receiver")
             if receiver is not None:
+                # (a) x.foo() sur variable de type inféré (x = Ctor() / const x = new Ctor())
                 tname = var_types.get(rel, {}).get(r["from"], {}).get(receiver)
                 if tname is not None:
-                    keys = class_index.get(tname, [])
-                    if len(keys) == 1:
+                    cls_keys = class_index.get(tname, [])
+                    if not cls_keys:
+                        # le type inféré peut être un import DEFAULT (`const x = new M()`, M =
+                        # default d'un module = une classe de nom différent) -> suivre le binding.
+                        dflt = default_targets.get(rel, {}).get(tname)
+                        if dflt is not None:
+                            tfile, real = dflt
+                            cls_keys = [k for k in class_index.get(real, []) if k[0] == tfile]
+                    if len(cls_keys) == 1:
                         resolved = _resolve_method(files, classes, class_index,
-                                                   keys[0], r["name"], set())
+                                                   cls_keys[0], r["name"], set())
                         if resolved is not None:
                             rfile, rname = resolved
                             edges.append([caller, f"{rfile}::{rname}"])
                             continue
+                # (b) ns.foo() où ns lie un MODULE (import * as ns / import mod) -> module::foo.
+                # Prudent comme import_targets : arête SEULEMENT si le module définit le nom ;
+                # sinon (ré-export non suivi, membre d'objet) on retombe sur le fan-out ci-dessous.
+                nmap = namespace_targets.get(rel)
+                if nmap is not None and receiver in nmap:
+                    tfile = nmap[receiver]
+                    if any(d["name"] == r["name"] for d in files[tfile]["defs"]):
+                        edges.append([caller, f"{tfile}::{r['name']}"])
+                        continue
             # appel direct `foo()` : un nom explicitement importé (`from mod import foo`)
             # résout DIRECTEMENT vers le fichier importé — AVANT le filtre builtin (un nom
             # importé est forcément interne, même s'il s'appelle comme un builtin) et sans
@@ -724,6 +813,13 @@ def assemble(files):
             if bmap is not None and r["name"] in bmap:
                 tfile, torig = bmap[r["name"]]
                 edges.append([caller, f"{tfile}::{torig}"])
+                continue
+            dmap = default_targets.get(rel)
+            if dmap is not None and r["name"] in dmap:
+                # `Foo()` où Foo = import default d'un module -> LE symbole exporté par défaut
+                # (nom réel possiblement ≠ Foo). Comme import_targets : avant le filtre builtin.
+                tfile, real = dmap[r["name"]]
+                edges.append([caller, f"{tfile}::{real}"])
                 continue
             if r["name"] in ALL_BUILTINS:  # appel d'un builtin -> pas une arête interne
                 continue
