@@ -1,0 +1,9 @@
+{
+  "description": "x = Alpha(); x = Beta(); x.act() : type ambigu (reaffectation) -> pas d'inference, repli fan-out sur les deux act (invariant jamais d'arete perdue)",
+  "edges": [
+    ["main.py::run", "alpha.py::Alpha"],
+    ["main.py::run", "alpha.py::act"],
+    ["main.py::run", "beta.py::Beta"],
+    ["main.py::run", "beta.py::act"]
+  ]
+}

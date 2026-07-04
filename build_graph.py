@@ -47,7 +47,7 @@ QUERIES_ROOT = os.path.join(os.path.dirname(__file__), "queries")
 # "imports", ou déplacement du rank hors du cache disque vers un calcul à la demande).
 # server.py compare ce numéro à celui du cache disque pour forcer un rebuild complet
 # plutôt que de mélanger silencieusement ancien/nouveau schéma.
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 # noms à NE PAS résoudre comme symboles internes (sinon les appels aux builtins/
 # méthodes ubiquitaires polluent le PageRank en pointant un symbole homonyme).
@@ -223,7 +223,8 @@ def _normalize_import(n):
 
 
 def parse_file(spec, source):
-    """Rend (defs, refs, imports) pour un fichier, selon la spec de langage."""
+    """Rend (defs, refs, imports, import_bindings, assignments) pour un fichier, selon la
+    spec de langage."""
     tree = spec["parser"].parse(source)
     lines = source.split(b"\n")
     captures = QueryCursor(spec["query"]).captures(tree.root_node)
@@ -295,6 +296,39 @@ def parse_file(spec, source):
             "receiver": receiver,  # "self" / "cls" / autre identifiant / None
         })
 
+    # 3.5) affectations `x = Ctor(...)` (Python) / `const x = new Ctor(...)` (JS/TS) ->
+    # INFÉRENCE DE TYPE : lie une variable à la classe de l'objet qu'on lui assigne, pour
+    # résoudre `x.foo()` vers Ctor.foo au lieu d'un fan-out par nom (résolution dans assemble).
+    # La capture @typeinfer.assign pointe un nœud de forme DIFFÉRENTE selon la grammaire
+    # (assignment Python vs variable_declarator JS/TS) -> on dispatche sur son type, comme
+    # _normalize_import. On ne retient que le constructeur SIMPLE (identifiant) : `x = mod.Ctor()`
+    # / `new ns.Ctor()` (attribut) et les cibles non-constructeur sont hors scope. Le `scope`
+    # (def englobant, comme les refs) sert de clé ; toutes les affectations sont gardées (niveau
+    # module inclus), la désambiguïsation (réaffectation à un type différent) se fait dans assemble.
+    assignments = []
+    for n in captures.get("typeinfer.assign", []):
+        if n.type == "assignment":              # Python : x = Ctor(...)
+            var_node = n.child_by_field_name("left")
+            val = n.child_by_field_name("right")
+            type_node = val.child_by_field_name("function") if (
+                val is not None and val.type == "call") else None
+        elif n.type == "variable_declarator":   # JS/TS : const x = new Ctor(...)
+            var_node = n.child_by_field_name("name")
+            val = n.child_by_field_name("value")
+            type_node = val.child_by_field_name("constructor") if (
+                val is not None and val.type == "new_expression") else None
+        else:
+            continue
+        if (var_node is None or type_node is None
+                or var_node.type != "identifier" or type_node.type != "identifier"):
+            continue
+        line = var_node.start_point[0] + 1
+        assignments.append({
+            "var": var_node.text.decode("utf8"),
+            "type": type_node.text.decode("utf8"),
+            "scope": _enclosing_name(scopes, line),
+        })
+
     # 4) imports (spec brute, non résolue ici — la résolution dépend des AUTRES fichiers
     # du repo, donc elle se fait dans assemble() une fois tous les fichiers parsés)
     imports = []
@@ -359,7 +393,7 @@ def parse_file(spec, source):
                     local = alias_n.text.decode("utf8") if alias_n is not None else orig
                     import_bindings.append({"local": local, "orig": orig, "spec": spec, "level": level})
 
-    return defs, refs, imports, import_bindings
+    return defs, refs, imports, import_bindings, assignments
 
 
 def _scan(folder, prev=None):
@@ -395,9 +429,9 @@ def _scan(folder, prev=None):
             spec = LANGS[os.path.splitext(path)[1].lower()]
             with open(path, "rb") as fh:
                 source = fh.read()
-            defs, refs, imports, import_bindings = parse_file(spec, source)
+            defs, refs, imports, import_bindings, assignments = parse_file(spec, source)
             files[rel] = {"defs": defs, "refs": refs, "imports": imports,
-                          "import_bindings": import_bindings}
+                          "import_bindings": import_bindings, "assignments": assignments}
             reparsed += 1
     return files, mtimes, reparsed, reused
 
@@ -614,6 +648,24 @@ def assemble(files):
         if bmap:
             import_targets[rel] = bmap
 
+    # INFÉRENCE DE TYPE : par fichier, {scope: {variable: nom_de_classe}} depuis les
+    # affectations `x = Ctor(...)`. Sert à résoudre `x.foo()` vers la classe de x (précis)
+    # au lieu du fan-out par nom. PRUDENCE (préserve l'invariant "jamais d'arête perdue") :
+    # si une variable est réaffectée à un type DIFFÉRENT dans le même scope, on la marque
+    # ambiguë (None) et on n'infère pas -> repli fan-out. Pas de flow-sensitivity (l'ordre
+    # des affectations est ignoré) : on ne cherche que le cas non-ambigu, sûr.
+    var_types = {}
+    for rel, data in files.items():
+        per_scope = {}
+        for a in data.get("assignments", []):
+            d = per_scope.setdefault(a["scope"], {})
+            if a["var"] in d and d[a["var"]] != a["type"]:
+                d[a["var"]] = None            # réaffectation à un type différent -> ambigu
+            elif a["var"] not in d:
+                d[a["var"]] = a["type"]
+        if per_scope:
+            var_types[rel] = per_scope
+
     # arêtes du graphe : (symbole appelant) -> (symbole défini), résolues par NOM
     # (sauf self./cls. ci-dessous, résolus par SCOPE quand la classe englobante est connue)
     edges = []
@@ -647,6 +699,23 @@ def assemble(files):
                     for target in symbols[r["name"]]:
                         edges.append([caller, f"{target['file']}::{r['name']}"])
                 continue
+            # appel de méthode `x.foo()` sur une variable de type INFÉRÉ (x = Ctor(...)) :
+            # résout précisément vers la méthode de Ctor (propre ou héritée) au lieu du fan-out
+            # par nom. Prudent : seulement si le type est connu, NON ambigu (une seule classe de
+            # ce nom) et si la méthode s'y résout ; sinon on laisse le fan-out ci-dessous
+            # (jamais de PERTE d'arête — au pire on retombe sur le comportement d'avant).
+            receiver = r.get("receiver")
+            if receiver is not None:
+                tname = var_types.get(rel, {}).get(r["from"], {}).get(receiver)
+                if tname is not None:
+                    keys = class_index.get(tname, [])
+                    if len(keys) == 1:
+                        resolved = _resolve_method(files, classes, class_index,
+                                                   keys[0], r["name"], set())
+                        if resolved is not None:
+                            rfile, rname = resolved
+                            edges.append([caller, f"{rfile}::{rname}"])
+                            continue
             # appel direct `foo()` : un nom explicitement importé (`from mod import foo`)
             # résout DIRECTEMENT vers le fichier importé — AVANT le filtre builtin (un nom
             # importé est forcément interne, même s'il s'appelle comme un builtin) et sans

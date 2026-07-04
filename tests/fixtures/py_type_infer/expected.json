@@ -1,0 +1,7 @@
+{
+  "description": "c = Circle(); c.area() : inference de type locale -> c.area() resout vers circle.py::area seulement (pas de fan-out vers square.py::area)",
+  "edges": [
+    ["main.py::render", "circle.py::Circle"],
+    ["main.py::render", "circle.py::area"]
+  ]
+}

@@ -1,0 +1,7 @@
+{
+  "description": "c = Child(); c.greet() : inference de type COMPOSEE avec l'heritage -> greet() (absent de Child) resolu vers base.py::greet en remontant l'heritage",
+  "edges": [
+    ["main.py::run", "base.py::greet"],
+    ["main.py::run", "child.py::Child"]
+  ]
+}

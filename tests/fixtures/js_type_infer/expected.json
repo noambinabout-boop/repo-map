@@ -1,0 +1,6 @@
+{
+  "description": "const c = new Circle(); c.area() : inference de type locale (JS/TS) -> c.area() resout vers circle.ts::area seulement (pas de fan-out vers square.ts::area)",
+  "edges": [
+    ["main.ts::render", "circle.ts::area"]
+  ]
+}

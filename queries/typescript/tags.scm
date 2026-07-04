@@ -57,6 +57,19 @@
     object: (this) @reference.receiver
     property: (property_identifier) @reference.call))
 
+; récepteur IDENTIFIANT d'un appel de méthode :  obj.method(...) — `obj` capturé pour
+; l'INFÉRENCE DE TYPE (si `const obj = new Ctor()`, résoudre vers Ctor.method au lieu d'un
+; fan-out par nom). Disjoint du cas `this` ci-dessus (nœud `this` != identifier).
+(call_expression
+  function: (member_expression
+    object: (identifier) @reference.receiver
+    property: (property_identifier) @reference.call))
+
+; affectation `const x = new Ctor(...)` : inférence de type (résoudre x.foo() vers Ctor).
+; Capturée entière puis parcourue dans build_graph (name = variable, value.constructor = type).
+(variable_declarator
+  value: (new_expression)) @typeinfer.assign
+
 ; --- références (imports) : construit le graphe FICHIER -> FICHIER (en plus des appels) ---
 ; import x from './foo' / import { a } from '../bar'  (source = la string littérale, guillemets inclus)
 (import_statement

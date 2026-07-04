@@ -15,6 +15,12 @@
 (assignment
   left: (identifier) @definition.variable)
 
+; affectation ENTIÈRE `x = Ctor(...)` : parse_file en extrait (variable -> type de l'objet
+; construit) pour l'INFÉRENCE DE TYPE — résoudre plus tard `x.foo()` vers la classe Ctor au
+; lieu d'un fan-out par nom (cf. build_graph.assemble). Capturée entière puis parcourue (left
+; = variable, right = call dont la fonction donne le nom de type) ; même méca que reference.import.from.
+(assignment) @typeinfer.assign
+
 ; --- références (appels) ---
 ; appel direct :  search(...)
 (call
