@@ -1,0 +1,4 @@
+# Exclusions repo-map spécifiques à ce projet (style .gitignore).
+# Les mini-repos synthétiques de la suite de tests ne font pas partie du code réel :
+# les indexer pollue le dogfooding (arêtes de fixtures dans le graphe de repo-map).
+tests/fixtures

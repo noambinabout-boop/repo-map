@@ -31,6 +31,7 @@ import os
 import json
 import argparse
 from collections import defaultdict
+from fnmatch import fnmatch
 
 import builtins as _builtins
 
@@ -111,12 +112,56 @@ ALL_BUILTINS = PY_BUILTINS | JS_BUILTINS
 # assemble()), donc le pire cas est identique au comportement d'avant.
 SELF_RECEIVERS = {"self", "cls", "this"}
 
-# dossiers jamais indexés (deps, build, vcs…)
+# dossiers jamais indexés (deps, build, vcs…) — défaut intégré, cross-projet
 EXCLUDE_DIRS = {
     ".venv", "venv", "node_modules", "__pycache__", ".git", ".hg", ".svn",
     "dist", "build", ".next", ".nuxt", "out", "coverage", ".turbo",
     ".expo", ".cache", "vendor",
 }
+
+# Exclusions SPÉCIFIQUES AU PROJET : un fichier `.repomapignore` à la racine du repo
+# ciblé (style .gitignore : un motif par ligne, `#` = commentaire). Fusionné avec
+# EXCLUDE_DIRS. C'est là qu'un projet déclare ses parasites que le défaut ne peut pas
+# deviner (fixtures de test, handoff design, scripts jetables…) sans polluer le défaut.
+IGNORE_FILENAME = ".repomapignore"
+
+
+def _load_ignore(folder):
+    """Lit les motifs de `<folder>/.repomapignore`. Rend une liste de motifs nettoyés
+    (sans lignes vides ni commentaires). Fichier absent -> liste vide (aucun effet)."""
+    path = os.path.join(folder, IGNORE_FILENAME)
+    try:
+        with open(path, encoding="utf-8") as fh:
+            lines = fh.read().splitlines()
+    except OSError:
+        return []
+    out = []
+    for raw in lines:
+        line = raw.strip()
+        if line and not line.startswith("#"):
+            out.append(line.rstrip("/"))
+    return out
+
+
+def _ignored(rel, patterns):
+    """Le chemin relatif POSIX `rel` (d'un dossier OU d'un fichier) est-il exclu par
+    l'un des motifs .repomapignore ? Sémantique volontairement simple (pas tout .gitignore) :
+      - nom nu sans glob (`fixtures`, `node_modules`) -> match tout SEGMENT de chemin ;
+      - motif avec `/` ou glob (`tests/fixtures`, `scripts/*`, `*.gen.ts`) -> match le
+        chemin lui-même, ou tout ce qui est SOUS lui (préfixe de dossier)."""
+    if not patterns:
+        return False
+    parts = rel.split("/")
+    for pat in patterns:
+        if not any(c in pat for c in "/*?[]"):
+            if pat in parts:            # nom nu -> n'importe où dans l'arborescence
+                return True
+            continue
+        if fnmatch(rel, pat) or fnmatch(rel, pat + "/*"):
+            return True
+        if rel == pat or rel.startswith(pat + "/"):   # préfixe de dossier
+            return True
+    return False
 
 
 def _enclosing_name(scopes, line):
@@ -449,14 +494,22 @@ def _scan(folder, prev=None):
     files, mtimes = {}, {}
     reparsed = reused = 0
 
+    ignore = _load_ignore(folder)  # motifs .repomapignore spécifiques au projet
     paths = []
     for root, dirs, fnames in os.walk(folder):
-        dirs[:] = [d for d in dirs if d not in EXCLUDE_DIRS]
+        reldir = os.path.relpath(root, folder).replace("\\", "/")
+        prefix = "" if reldir == "." else reldir + "/"
+        # prune : EXCLUDE_DIRS (nom) OU un motif .repomapignore visant ce sous-dossier
+        dirs[:] = [d for d in dirs if d not in EXCLUDE_DIRS
+                   and not _ignored(prefix + d, ignore)]
         for fn in fnames:
             if fn.endswith((".d.ts", ".min.js")):
                 continue  # déclarations de types / bundles minifiés = bruit
-            if os.path.splitext(fn)[1].lower() in LANGS:
-                paths.append(os.path.join(root, fn))
+            if os.path.splitext(fn)[1].lower() not in LANGS:
+                continue
+            if _ignored(prefix + fn, ignore):
+                continue  # fichier explicitement exclu par .repomapignore
+            paths.append(os.path.join(root, fn))
 
     for path in sorted(paths):
         rel = os.path.relpath(path, folder).replace("\\", "/")

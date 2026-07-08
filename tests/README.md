@@ -30,9 +30,16 @@ Pourquoi l'égalité d'ensemble et pas un simple « contient l'arête X » : un 
 résolution se manifeste autant par une arête **en trop** (fan-out vers un homonyme, faux
 builtin résolu) que par une arête **manquante**. L'égalité attrape les deux.
 
-Un **smoke test** final indexe repo-map lui-même : il doit ne pas crasher et produire
-> 0 arête (pas d'assertion de compte exact — trop fragile, le chiffre bouge à chaque
-évolution du code).
+Trois **smoke / régressions** finaux (hors `--only`) complètent les fixtures d'arêtes :
+- **smoke** : indexer repo-map lui-même ne doit ni crasher ni rendre 0 arête (pas de
+  compte exact — trop fragile, le chiffre bouge à chaque évolution du code).
+- **régression `where_is`** (bug du 06/07, denta-scribe) : le tri de `where_is` retombait
+  sur la comparaison de deux `dict` à rang+nom égaux → `'<' not supported between instances
+  of 'dict' and 'dict'`. La query vide (`where_is("")`) matche tous les symboles = collisions
+  massives = déclencheur garanti ; le test vérifie qu'aucun crash ne survient.
+- **`.repomapignore`** : fige la sémantique de `_ignored` (nom nu / préfixe de dossier /
+  glob) et vérifie bout-en-bout que le `.repomapignore` du repo exclut bien `tests/fixtures`
+  du build.
 
 ## Les fixtures (une par mécanisme de la piste #3)
 
@@ -60,11 +67,19 @@ propre d'un fan-out dans l'assertion.
 3. Quand l'inférence de type (`obj.foo()`) sera codée : ajouter `py_type_infer` /
    `js_type_infer` sur le même modèle.
 
-## Limite connue — pollution du dogfooding
+## Pollution du dogfooding — RÉSOLU (08/07) via `.repomapignore`
 
-`build(repo-map)` (repo-map indexé sur lui-même) inclut désormais `tests/fixtures/` :
-~31 arêtes parasites sur ~81, avec des symboles bidon (`parse`, `helper`, `foo`…) qui
-collisionnent avec le vrai code. `EXCLUDE_DIRS` n'exclut pas `tests` (à dessein : les
-tests d'un repo *utilisateur* méritent d'être cartographiés). Si le dogfooding de
-repo-map sur lui-même devient gênant, la vraie réponse est un mécanisme d'ignore
-par-repo (ex. `.repomapignore`), pas un défaut global — chantier séparé.
+Historiquement, `build(repo-map)` (repo-map indexé sur lui-même) incluait `tests/fixtures/`
+(~31 arêtes parasites, symboles bidon `parse`/`helper`/`foo`… collisionnant avec le vrai
+code). `EXCLUDE_DIRS` n'exclut **pas** `tests` à dessein — les tests d'un repo *utilisateur*
+méritent d'être cartographiés.
+
+La réponse est un ignore **par-repo**, pas un défaut global : un fichier **`.repomapignore`**
+à la racine du repo ciblé (style `.gitignore` : un motif par ligne, `#` = commentaire),
+**fusionné** avec `EXCLUDE_DIRS`. Sémantique (cf. `build_graph._ignored`) :
+- **nom nu** sans glob (`fixtures`, `node_modules`) → match n'importe quel segment de chemin ;
+- **motif avec `/` ou glob** (`tests/fixtures`, `scripts/*`, `*.gen.ts`) → match le chemin
+  lui-même **ou tout ce qui est sous lui** (préfixe de dossier).
+
+Le repo-map en fournit un (`repo-map/.repomapignore`) qui exclut `tests/fixtures`. Même
+usage sur un repo utilisateur : `design_handoff/`, scripts jetables, dossiers générés, etc.

@@ -135,6 +135,32 @@ def main():
             failed += 1
             print(f"  [FAIL] regression where_is a leve {exc!r}")
 
+        # Semantique .repomapignore (fige le matching de _ignored : nom nu, prefixe, glob).
+        try:
+            from build_graph import _ignored
+            pats = ["tests/fixtures", "node_modules", "*.gen.ts", "scripts/*"]
+            cases = {
+                "tests/fixtures/py_self_cls/a.py": True,   # sous un prefixe de dossier
+                "tests/fixtures": True,                    # le dossier lui-meme
+                "tests/run_tests.py": False,               # frere non exclu
+                "src/node_modules/x/i.js": True,           # nom nu, n'importe ou
+                "src/models.gen.ts": True,                 # glob de fichier
+                "src/models.ts": False,                    # ne matche pas le glob
+                "scripts/build.js": True,                  # glob de dossier
+                "src/scripts.py": False,                   # 'scripts' ailleurs, pas le motif
+            }
+            bad = {p: got for p, exp in cases.items()
+                   if (got := _ignored(p, pats)) != exp}
+            assert not bad, f"matching incorrect : {bad}"
+            # bout-en-bout : le .repomapignore du repo exclut bien tests/fixtures du build
+            indexed = build(REPO)["files"]
+            assert not any("fixtures" in f for f in indexed), \
+                "des fichiers de fixtures sont encore indexes malgre .repomapignore"
+            print("  [OK]   .repomapignore : matching (nom nu / prefixe / glob) + fixtures exclues du dogfooding")
+        except Exception as exc:  # noqa: BLE001
+            failed += 1
+            print(f"  [FAIL] .repomapignore a leve {exc!r}")
+
     print(f"\n{'== TOUT PASSE ==' if not failed else '== ' + str(failed) + ' ECHEC(S) =='}")
     return 1 if failed else 0
 
