@@ -120,6 +120,21 @@ def main():
             failed += 1
             print(f"\n  [FAIL] smoke : build(repo-map) a leve {exc!r}")
 
+        # Regression (bug du 2026-07-06, denta-scribe) : where_is triait des tuples
+        # (rang, nom, dict) et retombait sur la comparaison de deux dict a rang+nom
+        # egaux -> "'<' not supported between instances of 'dict' and 'dict'". La query
+        # vide matche TOUS les symboles -> collisions massives = declencheur garanti.
+        try:
+            import server  # meme venv que le MCP ; @mcp.tool() -> retomber sur .fn
+            _where_is = getattr(server.where_is, "fn", server.where_is)
+            getattr(server.index, "fn", server.index)(REPO)
+            res = _where_is("")
+            assert isinstance(res, str) and res.startswith("# where_is"), res[:80]
+            print("  [OK]   regression where_is : tri (rang, nom) stable, aucun crash sur query vide")
+        except Exception as exc:  # noqa: BLE001
+            failed += 1
+            print(f"  [FAIL] regression where_is a leve {exc!r}")
+
     print(f"\n{'== TOUT PASSE ==' if not failed else '== ' + str(failed) + ' ECHEC(S) =='}")
     return 1 if failed else 0
 

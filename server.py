@@ -197,7 +197,7 @@ def where_is(query: str) -> str:
     ranks = _ranks()
     hits = [(ranks.get(f"{e['file']}::{name}", 0.0), name, e)
             for name in matched_names for e in graph["symbols"][name]]
-    hits.sort(reverse=True)
+    hits.sort(key=lambda h: (h[0], h[1]), reverse=True)  # clé (rang, nom) : ne compare jamais le dict `e`
     for _, name, _e in hits[:5]:
         _touch(SESSION["mentioned"], name, MENTIONED_CAP)  # ce qu'on demande explicitement
     out = [f"# where_is(\"{query}\") — {len(hits)} résultat(s), triés par importance"]
