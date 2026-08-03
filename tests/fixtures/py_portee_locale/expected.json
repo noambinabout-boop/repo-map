@@ -1,0 +1,10 @@
+{
+  "description": "portee locale : deux fichiers definissant chacun leur main() ne sont plus relies ; closure resolue localement ; une methode homonyme ne capte pas un appel direct (fan-out conserve)",
+  "edges": [
+    ["alpha.py::outer", "alpha.py::inner"],
+    ["alpha.py::run", "alpha.py::main"],
+    ["beta.py::run", "beta.py::main"],
+    ["gamma.py::call_solo", "delta.py::solo"],
+    ["gamma.py::call_solo", "gamma.py::solo"]
+  ]
+}

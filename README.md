@@ -68,14 +68,14 @@ The server also runs standalone over stdio (`python server.py`) for any MCP-comp
 
 - **Symbol graph.** tree-sitter parses each file into definitions and a call/reference graph.
 - **Importance ranking.** A PageRank variant weighted *against* popularity (`1/fan-in`) so ubiquitous helpers don't drown out the code that actually structures the repo, merged with the import graph so shared components/constants aren't invisible.
-- **Scope resolution.** `self`/`cls`/`this`, class inheritance (Python & JS/TS `extends`), named/namespace/default imports, and light type inference (`x = Ctor(); x.foo()` → `Ctor.foo`) are resolved to the right target. Every resolution is *conservative*: when a target is ambiguous, it falls back to a broad edge rather than dropping one — it never loses an edge, at worst it adds one.
+- **Scope resolution.** `self`/`cls`/`this`, class inheritance (Python & JS/TS `extends`), named/namespace/default imports, light type inference (`x = Ctor(); x.foo()` → `Ctor.foo`) and **lexical scope** (a call to a name the calling file defines itself resolves to that local definition, not to same-named functions elsewhere) are resolved to the right target. Resolution stays *conservative*: when a target is ambiguous, it falls back to a broad edge rather than dropping one.
 - **Incremental cache.** Parses are cached per file by mtime in `~/.repo-map/cache/` (override with `REPO_MAP_CACHE`). Nothing is written into the repos you target. First index of a 284-file TS project: ~17 s; subsequent: ~0.3 s.
 - **Per-repo ignores.** Drop a `.repomapignore` (`.gitignore` syntax) at a repo root to keep generated/vendored dirs out of the graph.
 
 ## Limitations (honest)
 
 - **PageRank is sharper on Python than on React/Expo.** Structure there flows through JSX/imports/hooks, which the call graph doesn't see. The import-graph merge fixes "invisible shared components," but entry-point screens referenced only once by a route table can still rank low.
-- Name-based resolution outside the cases above may **add** a spurious edge; it never drops one.
+- Name-based resolution outside the cases above may **add** a spurious edge. The single place where edges are deliberately **removed** is lexical scope: a call is no longer linked to a same-named definition in *another* file when the calling file defines that name itself. Measured on a 285-file TS app: 59 edges out of 2006 dropped, all of them cross-file homonyms (a `main()` per CLI script, a `load()` per React component), and **no caller left disconnected** from the symbol it calls. Methods are excluded from this rule — reaching them requires `self.`/`this.`, handled separately.
 - Python `from . import x` (no module name) is not resolved.
 - repo-map indexes **structure**, not literals — use `grep_code` for flags/config strings.
 

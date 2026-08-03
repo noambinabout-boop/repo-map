@@ -190,6 +190,48 @@ def _enclosing_class(scopes, line):
     return best
 
 
+def _local_scopes(defs):
+    """Index de PORTÉE LEXICALE d'un fichier : `{nom: [(parent_kind, p_line, p_end), ...]}`
+    où chaque entrée décrit UNE définition de ce nom et le scope qui la contient
+    (`parent_kind` vaut None pour une définition au niveau module).
+
+    Sert à ne pas répandre un appel `foo()` vers tous les homonymes du repo quand LE
+    fichier courant définit déjà `foo` (cf. `_visible_locally`). Le parent est calculé en
+    O(n log n) par balayage à pile (tri par début croissant, fin décroissante) plutôt qu'en
+    comparant toutes les paires : un fichier-monolithe peut porter des centaines de defs."""
+    order = sorted(defs, key=lambda d: (d["line"], -d["end_line"]))
+    index, stack = {}, []
+    for d in order:
+        while stack and stack[-1]["end_line"] < d["line"]:
+            stack.pop()
+        parent = stack[-1] if stack else None
+        index.setdefault(d["name"], []).append(
+            (None, 0, 0) if parent is None
+            else (parent["kind"], parent["line"], parent["end_line"])
+        )
+        stack.append(d)
+    return index
+
+
+def _visible_locally(scope_index, name, line):
+    """Le fichier courant définit-il `name` de façon VISIBLE depuis `line`, pour un appel
+    DIRECT `name()` ?
+
+    Portée lexicale, volontairement stricte : on ne remplace un fan-out large par une arête
+    locale que dans les cas où le langage rend la définition locale réellement atteignable.
+    - définition au niveau module -> visible partout dans le fichier ;
+    - définition imbriquée dans une FONCTION -> visible seulement si l'appel est lui-même
+      dans cette fonction (closure) ;
+    - définition imbriquée dans une CLASSE (méthode) -> JAMAIS visible ainsi : l'appeler
+      exigerait `self.`/`this.` (traité plus haut, par scope)."""
+    for parent_kind, p_line, p_end in scope_index.get(name, ()):
+        if parent_kind is None:
+            return True
+        if parent_kind != "class" and p_line <= line <= p_end:
+            return True
+    return False
+
+
 def _base_name(node):
     """Nom simple d'un noeud désignant une classe de base, résolu ensuite PAR NOM comme le
     reste. `A` -> 'A' ; `pkg.Base`/`ns.Base` (attribute Python ou member_expression JS/TS) ->
@@ -716,6 +758,11 @@ def assemble(files):
                 {"file": rel, "line": d["line"], "kind": d["kind"]}
             )
 
+    # index de portée lexicale par fichier (nom -> scopes qui le définissent) : sert à
+    # résoudre un appel direct vers la définition LOCALE quand elle existe, au lieu de
+    # répandre l'appel vers tous les homonymes du repo (cf. `_visible_locally`).
+    scope_index = {rel: _local_scopes(data["defs"]) for rel, data in files.items()}
+
     # registres de classes pour la résolution d'héritage (self.foo() hérité) :
     #  - classes      : (file, line) -> (file, class_def)   accès direct par clé de scope
     #  - class_index  : nom de classe -> [ (file, line) ]   pour résoudre un nom de base
@@ -877,6 +924,17 @@ def assemble(files):
             if r["name"] in ALL_BUILTINS:  # appel d'un builtin -> pas une arête interne
                 continue
             if r["name"] in symbols:  # on ne garde que les appels internes au repo
+                # PORTÉE LOCALE D'ABORD (correctif homonymes) : si CE fichier définit le nom
+                # de façon visible depuis la ligne d'appel, l'appel désigne cette définition
+                # — pas ses homonymes d'autres fichiers. Sans ça, deux fichiers définissant
+                # chacun leur `loadPatients` local (cas réel, denta-scribe) sont reliés par
+                # une arête qui n'existe pas dans le code. C'est le SEUL endroit qui ôte des
+                # arêtes plutôt que d'en ajouter : assumé, un faux lien coûte plus cher
+                # qu'une arête manquante (il fait mentir who_references / what_it_uses, et
+                # relie des parties de l'app qui n'ont rien à voir).
+                if _visible_locally(scope_index[rel], r["name"], r["line"]):
+                    edges.append([caller, f"{rel}::{r['name']}"])
+                    continue
                 for target in symbols[r["name"]]:
                     callee = f"{target['file']}::{r['name']}"
                     edges.append([caller, callee])
