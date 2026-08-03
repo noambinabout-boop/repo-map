@@ -1,0 +1,11 @@
+{
+  // Commentaire volontaire : un tsconfig est du JSON *avec commentaires*, que
+  // json.loads refuse tel quel. Si le nettoyage JSONC casse, cette fixture le dit.
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./src/*"],
+      "@config": ["./src/config.ts"]
+    }
+  }
+}
