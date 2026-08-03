@@ -51,8 +51,8 @@ Trois **smoke / régressions** finaux (hors `--only`) complètent les fixtures d
 | `ts_extends`        | idem via la clause `extends` en TS (s.4)                      |
 | `py_named_imports`  | `from mod import a, b as c` : nom importé résolu vers le bon fichier, alias, contourne builtin (s.5) |
 | `js_named_imports`  | `import { a, b as c } from './mod'` : idem JS/TS (s.6)        |
-| `py_portee_locale`  | **portée lexicale** : `main()` local ≠ `main()` du voisin ; closure ; une méthode homonyme ne capte PAS un appel direct (04/08) |
-| `ts_portee_locale`  | idem, décalqué du cas réel denta-scribe (deux écrans, un `loadPatients` chacun) (04/08) |
+| `py_portee_locale`  | **portée lexicale** : `main()` local ≠ `main()` du voisin ; closure ; une méthode homonyme ne capte PAS un appel direct (03/08) |
+| `ts_portee_locale`  | idem, décalqué du cas réel denta-scribe (deux écrans, un `loadPatients` chacun) (03/08) |
 
 ⚠️ `*_portee_locale` sont les seules fixtures qui figent une **suppression** d'arêtes.
 Toutes les autres figent l'invariant « au pire on ajoute une arête, jamais on n'en perd » ;

@@ -1,4 +1,4 @@
-# Fixture portee locale (correctif homonymes, session du 04/08). alpha et beta definissent
+# Fixture portee locale (correctif homonymes, session du 03/08). alpha et beta definissent
 # CHACUN leur `main()` : l'appel local ne doit pas se repandre vers l'homonyme du voisin.
 def main():
     return 1
