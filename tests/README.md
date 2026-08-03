@@ -51,6 +51,15 @@ Trois **smoke / régressions** finaux (hors `--only`) complètent les fixtures d
 | `ts_extends`        | idem via la clause `extends` en TS (s.4)                      |
 | `py_named_imports`  | `from mod import a, b as c` : nom importé résolu vers le bon fichier, alias, contourne builtin (s.5) |
 | `js_named_imports`  | `import { a, b as c } from './mod'` : idem JS/TS (s.6)        |
+| `py_portee_locale`  | **portée lexicale** : `main()` local ≠ `main()` du voisin ; closure ; une méthode homonyme ne capte PAS un appel direct (04/08) |
+| `ts_portee_locale`  | idem, décalqué du cas réel denta-scribe (deux écrans, un `loadPatients` chacun) (04/08) |
+
+⚠️ `*_portee_locale` sont les seules fixtures qui figent une **suppression** d'arêtes.
+Toutes les autres figent l'invariant « au pire on ajoute une arête, jamais on n'en perd » ;
+la portée locale l'assume à un seul endroit, parce qu'un faux lien entre deux fichiers coûte
+plus cher qu'une arête manquante (il fait mentir `who_references` / `what_it_uses`). Le
+garde-fou est dans `gamma.py` : dès qu'une définition locale n'est PAS réellement
+atteignable (méthode de classe, closure hors portée), le fan-out d'avant doit revenir.
 
 Chaque fixture met les **homonymes dans des fichiers différents** : le nœud d'arête est
 `fichier::nom` (sans la classe), donc c'est le seul moyen de distinguer une résolution

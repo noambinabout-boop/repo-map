@@ -1,0 +1,7 @@
+{
+  "description": "cas reel denta-scribe : deux ecrans avec chacun leur loadPatients dans un effet -> chaque appel reste dans son fichier, plus de faux lien entre les deux ecrans",
+  "edges": [
+    ["home.tsx::HomeScreen", "home.tsx::loadPatients"],
+    ["patients.tsx::PatientsScreen", "patients.tsx::loadPatients"]
+  ]
+}
