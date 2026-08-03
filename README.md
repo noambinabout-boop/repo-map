@@ -28,6 +28,7 @@ The gains come from never paying for a file body you don't end up editing.
 | `outline(file)` | Table of contents of a file: class/function signatures + line ranges. ~95 % fewer tokens than reading it. |
 | `get_symbol(file, name)` | The full body of a single symbol — the only thing you actually read to start coding. |
 | `who_references(name)` | Who calls a symbol (what a signature change might break). |
+| `what_it_uses(name, depth=1)` | The mirror: what a symbol *depends on*. Accepts a symbol, a file (everything it defines and imports) or an exact `file::symbol`. `depth=0` walks the full transitive closure — all the code actually reached from an entry point. |
 
 ## Languages
 
