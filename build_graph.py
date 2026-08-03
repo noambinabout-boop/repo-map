@@ -29,6 +29,7 @@ Usage : python build_graph.py <dossier> [-o code_graph.json]
 import sys
 import os
 import json
+import re
 import argparse
 from collections import defaultdict
 from fnmatch import fnmatch
@@ -526,6 +527,82 @@ def parse_file(spec, source):
     return defs, refs, imports, import_bindings, assignments, mod_imports
 
 
+TSCONFIG_NAMES = ("tsconfig.json", "jsconfig.json")
+
+
+def _strip_jsonc(text):
+    """JSON avec commentaires (ce qu'est un tsconfig) -> JSON que `json` accepte.
+    Retire `//`, `/* */` et les virgules traînantes, en respectant les chaînes : un
+    `"https://x"` ne doit pas être amputé."""
+    out, i, n = [], 0, len(text)
+    while i < n:
+        c = text[i]
+        if c == '"':                                  # chaîne : recopiée telle quelle
+            out.append(c)
+            i += 1
+            while i < n:
+                out.append(text[i])
+                if text[i] == "\\":                   # échappement : le suivant est littéral
+                    if i + 1 < n:
+                        out.append(text[i + 1])
+                    i += 2
+                    continue
+                if text[i] == '"':
+                    i += 1
+                    break
+                i += 1
+            continue
+        if c == "/" and i + 1 < n and text[i + 1] == "/":
+            while i < n and text[i] != "\n":
+                i += 1
+            continue
+        if c == "/" and i + 1 < n and text[i + 1] == "*":
+            end = text.find("*/", i + 2)
+            i = n if end == -1 else end + 2
+            continue
+        out.append(c)
+        i += 1
+    return re.sub(r",(\s*[}\]])", r"\1", "".join(out))
+
+
+def _load_ts_aliases(folder):
+    """Les alias de chemins du dépôt : [(motif, [cibles relatives au dépôt])].
+
+    Source : `compilerOptions.paths` (+ `baseUrl`) du tsconfig/jsconfig à la racine.
+    **Fail-open** : tsconfig absent, illisible ou exotique -> pas d'alias, le graphe
+    reste celui d'avant. Un tsconfig mal lu ne doit jamais casser un index."""
+    for name in TSCONFIG_NAMES:
+        path = os.path.join(folder, name)
+        if not os.path.isfile(path):
+            continue
+        try:
+            with open(path, encoding="utf-8-sig") as fh:
+                config = json.loads(_strip_jsonc(fh.read()))
+            options = config.get("compilerOptions") or {}
+            paths = options.get("paths") or {}
+            base = (options.get("baseUrl") or ".").replace("\\", "/").strip("/")
+            base = "" if base in ("", ".") else base
+            aliases = []
+            for pattern, targets in paths.items():
+                if not isinstance(targets, list):
+                    continue
+                resolved = []
+                for target in targets:
+                    if not isinstance(target, str):
+                        continue
+                    t = target.replace("\\", "/")
+                    while t.startswith("./"):
+                        t = t[2:]
+                    t = t.lstrip("/")
+                    resolved.append(f"{base}/{t}" if base else t)
+                if resolved:
+                    aliases.append((pattern, resolved))
+            return aliases
+        except (OSError, ValueError, AttributeError):
+            return []
+    return []
+
+
 def _scan(folder, prev=None):
     """Parse les fichiers SUPPORTÉS du dossier en RÉUTILISANT les inchangés (régé
     incrémentale). `prev` = graphe précédent ({'files':..., 'mtimes':...}) ou None. Un
@@ -601,13 +678,10 @@ def _resolve_py_import(files, current_rel, spec, level):
     return None
 
 
-def _resolve_js_import(files, current_rel, spec):
-    """Spec JS/TS -> chemin de fichier CONNU du repo, ou None (paquet npm externe non
-    résolu — node_modules est de toute façon exclu du scan)."""
-    if not spec.startswith((".", "/")):
-        return None
-    base_dir = "/".join(current_rel.split("/")[:-1])
-    raw = os.path.normpath((base_dir + "/" + spec) if base_dir else spec).replace("\\", "/").lstrip("/")
+def _js_candidate(files, raw):
+    """Un chemin sans extension -> le fichier du repo qu'il désigne, ou None.
+    Extension implicite, et forme dossier (qui désigne son `index`)."""
+    raw = raw.replace("\\", "/").lstrip("/")
     if raw in files:
         return raw
     for ext in (".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"):
@@ -619,14 +693,50 @@ def _resolve_js_import(files, current_rel, spec):
     return None
 
 
-def _resolve_import(files, current_rel, imp):
+def _resolve_alias(files, spec, aliases):
+    """Spec non relative (`@/lib/db`) -> fichier du repo via les alias du tsconfig.
+
+    Sans ça, un projet qui importe par alias — la norme sur Next/Vite — a un graphe
+    d'imports quasi vide et ses appels retombent sur la résolution par nom. Mesuré sur
+    un dépôt Next témoin : 532 imports internes sur 601 passent par `@/`."""
+    for pattern, targets in aliases:
+        if "*" in pattern:
+            head, _, tail = pattern.partition("*")
+            if not (spec.startswith(head) and spec.endswith(tail)):
+                continue
+            if len(spec) < len(head) + len(tail):
+                continue
+            star = spec[len(head):len(spec) - len(tail)] if tail else spec[len(head):]
+            candidates = [t.replace("*", star, 1) for t in targets]
+        elif spec == pattern:
+            candidates = list(targets)
+        else:
+            continue
+        for candidate in candidates:
+            hit = _js_candidate(files, candidate)
+            if hit:
+                return hit
+    return None
+
+
+def _resolve_js_import(files, current_rel, spec, aliases=()):
+    """Spec JS/TS -> chemin de fichier CONNU du repo, ou None (paquet npm externe non
+    résolu — node_modules est de toute façon exclu du scan)."""
+    if not spec.startswith((".", "/")):
+        return _resolve_alias(files, spec, aliases) if aliases else None
+    base_dir = "/".join(current_rel.split("/")[:-1])
+    raw = os.path.normpath((base_dir + "/" + spec) if base_dir else spec)
+    return _js_candidate(files, raw)
+
+
+def _resolve_import(files, current_rel, imp, aliases=()):
     """Dispatch par extension du fichier courant (pas de langue stockée par import)."""
     if current_rel.endswith(".py"):
         return _resolve_py_import(files, current_rel, imp["spec"], imp["level"])
-    return _resolve_js_import(files, current_rel, imp["spec"])
+    return _resolve_js_import(files, current_rel, imp["spec"], aliases)
 
 
-def _import_edges(files):
+def _import_edges(files, aliases=()):
     """Graphe FICHIER -> FICHIER (au niveau <module>) construit depuis les imports,
     en PLUS du graphe d'appels — capture la structure (JSX/composants, ré-exports...)
     qui échappe au graphe d'appels pur. Fanout vers TOUTES les défs du fichier importé
@@ -635,7 +745,7 @@ def _import_edges(files):
     edges = []
     for rel, data in files.items():
         for imp in data.get("imports", []):
-            target = _resolve_import(files, rel, imp)
+            target = _resolve_import(files, rel, imp, aliases)
             if target and target != rel:
                 for d in files[target]["defs"]:
                     edges.append([f"{rel}::<module>", f"{target}::{d['name']}"])
@@ -742,7 +852,7 @@ def _resolve_method(files, classes, class_index, class_key, method_name, visited
     return None
 
 
-def assemble(files):
+def assemble(files, aliases=()):
     """À partir des {fichier: {defs, refs, imports}}, (re)calcule l'index `symbols`, les
     `edges` d'APPELS (exposés à who_references, résolus par NOM, builtins exclus) et le
     graphe `import_edges` (résolu, mais gardé SÉPARÉ — jamais dans `edges`, pour ne pas
@@ -784,7 +894,7 @@ def assemble(files):
     for rel, data in files.items():
         bmap = {}
         for b in data.get("import_bindings", []):
-            target = _resolve_import(files, rel, {"spec": b["spec"], "level": b["level"]})
+            target = _resolve_import(files, rel, {"spec": b["spec"], "level": b["level"]}, aliases)
             if target is None:
                 continue
             if any(d["name"] == b["orig"] for d in files[target]["defs"]):
@@ -822,14 +932,14 @@ def assemble(files):
         mi = data.get("mod_imports", {})
         nmap = {}
         for b in mi.get("namespace", []):
-            target = _resolve_import(files, rel, {"spec": b["spec"], "level": b["level"]})
+            target = _resolve_import(files, rel, {"spec": b["spec"], "level": b["level"]}, aliases)
             if target is not None:
                 nmap[b["local"]] = target
         if nmap:
             namespace_targets[rel] = nmap
         dmap = {}
         for b in mi.get("default", []):
-            target = _resolve_import(files, rel, {"spec": b["spec"], "level": b["level"]})
+            target = _resolve_import(files, rel, {"spec": b["spec"], "level": b["level"]}, aliases)
             if target is None:
                 continue
             real = default_export_of.get(target)
@@ -944,7 +1054,7 @@ def assemble(files):
     # de composants (imports), pas par des appels de fonction, donc le call-graph seul rate
     # les vrais organes. Gardé séparé de `edges` (jamais fusionné dedans), fusionné seulement
     # au moment du ranking dans `rerank`.
-    import_edges = _import_edges(files)
+    import_edges = _import_edges(files, aliases)
 
     return {"files": files, "symbols": symbols, "edges": edges, "import_edges": import_edges}
 
@@ -954,11 +1064,13 @@ def build(folder, prev=None):
     a changé). Le résultat embarque `mtimes` (pour le prochain incrément) et `_stats`.
     Ne contient PAS de rank calculé (cf. `rerank`, dépendant du contexte de session)."""
     files, mtimes, reparsed, reused = _scan(folder, prev)
-    graph = assemble(files)
+    aliases = _load_ts_aliases(folder)   # relu à chaque build : jamais mis en cache disque
+    graph = assemble(files, aliases)
     graph["mtimes"] = mtimes
     graph["_schema"] = SCHEMA_VERSION
     graph["_stats"] = {"reparsed": reparsed, "reused": reused,
-                        "import_edges": len(graph["import_edges"])}
+                        "import_edges": len(graph["import_edges"]),
+                        "aliases": len(aliases)}
     return graph
 
 

@@ -1,0 +1,7 @@
+{
+  "description": "alias tsconfig (@/* et motif sans etoile) : l'import aliase est resolu vers le bon fichier, pas de fan-out vers l'homonyme de legacy ; tsconfig lu en JSONC (commentaires)",
+  "edges": [
+    ["src/app/page.tsx::Page", "src/config.ts::settings"],
+    ["src/app/page.tsx::Page", "src/lib/db.ts::save"]
+  ]
+}
