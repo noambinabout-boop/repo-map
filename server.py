@@ -286,5 +286,111 @@ def who_references(name: str) -> str:
     return "\n".join(out)
 
 
+def _starts_for(graph, name):
+    """Nœuds de départ correspondant à `name`.
+
+    Trois formes acceptées : un symbole (« maFonction »), un fichier
+    (« src/app/page.tsx » → son niveau module) ou un nœud exact
+    (« src/app/page.tsx::Home ») pour lever une ambiguïté.
+    """
+    if "::" in name:
+        return [name]
+    if name in graph["files"]:
+        # Un fichier n'a pas d'appel sortant au niveau module : partir du module
+        # SEUL ne donnerait que ses imports. On part donc de tout ce qu'il définit.
+        defs = graph["files"][name].get("defs", [])
+        return [f"{name}::<module>"] + sorted(f"{name}::{d['name']}" for d in defs)
+    starts = set()
+    for src, dst in graph["edges"]:
+        for node in (src, dst):
+            if node.endswith(f"::{name}"):
+                starts.add(node)
+    return sorted(starts)
+
+
+def _uses(edges, starts, depth=1):
+    """Parcours DESCENDANT du graphe : rend un niveau de nœuds par cran de distance.
+
+    `depth=0` = illimité (fermeture transitive complète). Les cycles sont coupés :
+    un nœud déjà vu n'est jamais re-parcouru.
+    """
+    outgoing = {}
+    for src, dst in edges:
+        outgoing.setdefault(src, set()).add(dst)
+    seen = set(starts)
+    frontier = set(starts)
+    levels = []
+    while frontier and (depth == 0 or len(levels) < depth):
+        nxt = set()
+        for node in frontier:
+            for dst in outgoing.get(node, ()):
+                if dst not in seen:
+                    seen.add(dst)
+                    nxt.add(dst)
+        if not nxt:
+            break
+        levels.append(nxt)
+        frontier = nxt
+    return levels
+
+
+def _group_by_file(nodes):
+    """« fichier::symbole » -> {fichier: [symboles triés]}, pour un rendu compact."""
+    grouped = {}
+    for node in nodes:
+        file, _, symbol = node.rpartition("::")
+        grouped.setdefault(file, []).append(symbol)
+    return {f: sorted(s) for f, s in sorted(grouped.items())}
+
+
+@mcp.tool()
+def what_it_uses(name: str, depth: int = 1, max_results: int = 60) -> str:
+    """Qu'utilise ce symbole ? Lecture DESCENDANTE du graphe — miroir de who_references.
+
+    who_references remonte (qui m'appelle = ce que je casse) ; celui-ci descend
+    (ce dont je dépends = ce que je dois comprendre pour lire ce code).
+    Accepte un symbole, un fichier (= tout ce que ce fichier tire) ou un
+    « fichier::symbole » exact. `depth=0` donne la fermeture complète : tout le
+    code réellement atteint depuis ce point d'entrée.
+    """
+    graph = _graph()
+    _touch(SESSION["mentioned"], name, MENTIONED_CAP)
+    starts = _starts_for(graph, name)
+    if not starts:
+        return f"Symbole ou fichier inconnu : « {name} »."
+    # Les deux familles d'arêtes comptent : les appels (symbole -> symbole) et les
+    # imports (module -> symbole importé). Les secondes seules portent ce qu'un
+    # fichier tire à son niveau module.
+    levels = _uses(graph["edges"] + graph["import_edges"], starts, depth)
+    total = sum(len(l) for l in levels)
+    if not total:
+        return (f"« {name} » n'utilise aucun symbole interne "
+                f"(feuille du graphe, ou n'appelle que du code hors repo).")
+
+    depth_label = "complet" if depth == 0 else f"profondeur {depth}"
+    out = [f"# what_it_uses(\"{name}\", {depth_label}) — {total} symbole(s) "
+           f"sur {len(levels)} niveau(x)"]
+    if name in graph["files"]:
+        out.append(f"  (départ : tout ce que {name} définit et importe)")
+    elif len(starts) > 1:
+        out.append(f"  (départ ambigu : {len(starts)} définitions de « {name} »)")
+    shown = 0
+    for i, level in enumerate(levels, 1):
+        if shown >= max_results:
+            restant = sum(len(l) for l in levels[i - 1:])
+            out.append(f"  … {restant} symbole(s) au-delà du niveau {i - 1} "
+                       f"(augmenter max_results)")
+            break
+        out.append(f"  niveau {i} ({len(level)})")
+        for file, symbols in _group_by_file(level).items():
+            if shown >= max_results:
+                break
+            visible = symbols[: max_results - shown]
+            shown += len(visible)
+            suffix = "" if len(visible) == len(symbols) else f" … +{len(symbols) - len(visible)}"
+            out.append(f"    {file}  ::  {', '.join(visible)}{suffix}")
+    return "\n".join(out)
+
+
 if __name__ == "__main__":
     mcp.run()
